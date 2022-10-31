@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -192,5 +193,47 @@ func GetIP() string {
 
 	}
 	return ip
+
+}
+
+// SubStr 截取字符串，支持多字节字符  start：起始下标，负数从从尾部开始，最后一个为-1 length：截取长度，负数表示截取到末尾
+func SubStr(str string, start int, length int) (result string) {
+	s := []rune(str)
+	total := len(s)
+	if total == 0 {
+		return
+	}
+	// 允许从尾部开始计算
+	if start < 0 {
+		start = total + start
+		if start < 0 {
+			return
+		}
+	}
+	if start > total {
+		return
+	}
+	// 到末尾
+	if length < 0 {
+		length = total
+	}
+
+	end := start + length
+	if end > total {
+		result = string(s[start:])
+	} else {
+		result = string(s[start:end])
+	}
+
+	return
+}
+
+// GetPramFromRegexp 匹配正则中的特定字符串，输出最左匹配字符串及子字符串 例如	GetPramFromRegexp(`USERID ogg@orcl,PASSWORD "jhmk@1234"`,`USERID (.*),PASSWORD (.*)`)
+
+func GetPramFromRegexp(text string, template string) []string {
+	Regexp := regexp.MustCompile(template)
+	params := Regexp.FindStringSubmatch(text)
+
+	return params
 
 }

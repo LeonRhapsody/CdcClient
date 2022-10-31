@@ -31,6 +31,8 @@ func defaultConfig() {
 	viper.SetDefault("cert", "./ogg.crt")
 	viper.SetDefault("key", "./ogg.key")
 	viper.SetDefault("ca", "./ca")
+	viper.SetDefault("ORACLE_SID", "orcl")
+
 }
 
 func ReadConfig() RunConfig {
@@ -51,6 +53,7 @@ func ReadEnv() ogg.RunEnv {
 	viper.AutomaticEnv()
 
 	viper.BindEnv("OGG_HOME")
+	viper.BindEnv("ORACLE_SID")
 	viper.BindEnv("USER")
 	viper.BindEnv("ORACLE_HOME")
 
@@ -68,10 +71,11 @@ func ReadEnv() ogg.RunEnv {
 
 	defaultConfig()
 	runEnv := ogg.RunEnv{
-		USER:        fmt.Sprintf("%v", viper.Get("USER")),
-		ORACLE_HOME: fmt.Sprintf("%v", viper.Get("ORACLE_HOME")),
-		OGG_HOME:    fmt.Sprintf("%v", viper.Get("OGG_HOME")),
-		IP:          shell.GetIP(),
+		USER:       fmt.Sprintf("%v", viper.Get("USER")),
+		OracleHome: fmt.Sprintf("%v", viper.Get("ORACLE_HOME")),
+		OggHome:    fmt.Sprintf("%v", viper.Get("OGG_HOME")),
+		SID:        fmt.Sprintf("%v", viper.Get("ORACLE_SID")),
+		IP:         shell.GetIP(),
 	}
 
 	return runEnv

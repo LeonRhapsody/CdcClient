@@ -6,7 +6,9 @@ import (
 	"github.com/LeonRhapsody/overseer"
 	"github.com/LeonRhapsody/overseer/fetcher"
 	"github.com/gin-gonic/gin"
+	"log"
 	"net/http"
+	"runtime"
 )
 
 type RunHttp struct {
@@ -17,6 +19,9 @@ type RunHttp struct {
 }
 
 func main() {
+
+	systemType := runtime.GOOS
+	log.Printf(systemType)
 
 	runConfig := config.ReadConfig()
 	runHttp := RunHttp{
@@ -39,7 +44,7 @@ func (r RunHttp) prog(state overseer.State) {
 
 	runEnv := config.ReadEnv()
 
-	gin.SetMode(gin.ReleaseMode) //全局设置环境
+	//gin.SetMode(gin.ReleaseMode) //全局设置环境
 
 	route := gin.Default()
 
@@ -54,8 +59,9 @@ func (r RunHttp) prog(state overseer.State) {
 			c.String(http.StatusOK, runEnv.RepairOgg())
 		})
 
-		oggGroup.GET("/getdef", func(c *gin.Context) {
-			str := runEnv.GenDefgenConf()
+		oggGroup.GET("/getdef/:sysId", func(c *gin.Context) {
+			sysID := c.Param("sysId")
+			str := runEnv.GenDefgenConf(sysID)
 			c.String(http.StatusOK, str)
 		})
 
@@ -70,10 +76,10 @@ func (r RunHttp) prog(state overseer.State) {
 			c.String(http.StatusOK, runEnv.RestartOgg(name))
 		})
 
-		oggGroup.GET("/UpdateRepDefFile/:from/:to", func(c *gin.Context) {
+		oggGroup.GET("/UpdateRepDefFile/:from/:repName", func(c *gin.Context) {
 			from := c.Param("from")
-			to := c.Param("to")
-			str := ogg.UpdateRepDefFile(from, to)
+			repName := c.Param("repName")
+			str := ogg.UpdateRepDefFile(from, repName)
 			c.String(http.StatusOK, str)
 		})
 

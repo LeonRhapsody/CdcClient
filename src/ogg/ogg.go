@@ -1,13 +1,15 @@
 package ogg
 
 import (
-	"bytes"
 	"crypto/tls"
 	"encoding/json"
 	"github.com/LeonRhapsody/CdcClient/src/shell"
+	"html/template"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"unsafe"
 )
@@ -19,137 +21,126 @@ type ClientInfo struct {
 }
 
 type TaskInfo struct {
-	Name string `json:"name"`
-	IP   string `json:"ip"`
-	Task []struct {
-		SysID     string `json:"SysID"`
-		Type      string `json:"Type"`
-		Status    string `json:"Status"`
-		Name      string `json:"Name"`
-		CheckLag  string `json:"CheckLag"`
-		CommitLag string `json:"CommitLag"`
-		Error     string `json:"Error"`
-	}
+	Name  string `json:"name"`
+	IP    string `json:"ip"`
+	Tasks *[]Task
 }
 
 type RunEnv struct {
-	ORACLE_HOME string `env:"ORACLE_HOME"`
-	USER        string `env:"USER"`
-	OGG_HOME    string `env:"OGG_HOME"`
-	IP          string
+	OracleHome string `env:"ORACLE_HOME"`
+	OggHome    string `env:"OGG_HOME"`
+	USER       string `env:"USER"`
+	IP         string
+	SID        string `env:"ORACLE_SID"`
 }
 
-func (r RunEnv) CmdOgg(cmd string) (string, error) {
-	var bt bytes.Buffer
-	bt.WriteString("( source ~/.bash_profile || source /etc/profile ) && echo \"")
-	bt.WriteString(cmd)
-	bt.WriteString("\"|")
-	bt.WriteString(r.OGG_HOME)
-	bt.WriteString("/ggsci")
+type Param struct {
+	SysID         string
+	SID           string
+	Schema        string
+	TaskName      string
+	UserName      string
+	Password      string
+	TrailFileName string
+	DefFileName   string
+	IsADG         bool
+	ISLogInAsm    bool
+	TableList     []string
+	RepIP         string
+	RepPort       string
+}
 
-	stdout, err := shell.Command(bt.String())
+type Task struct {
+	SysID     string `json:"SysID"`
+	Type      string `json:"Type"`
+	Status    string `json:"Status"`
+	Name      string `json:"Name"`
+	CheckLag  string `json:"CheckLag"`
+	CommitLag string `json:"CommitLag"`
+	Error     string `json:"Error"`
+}
+
+// CmdOgg 执行ogg命令，返回结果
+func (r *RunEnv) CmdOgg(cmd string) (string, error) {
+
+	bt := "( source ~/.bash_profile || source /etc/profile ) && echo " + cmd + "|" + r.OggHome + "/ggsci"
+
+	stdout, err := shell.Command(bt)
 	return stdout, err
 
 }
 
-func (r RunEnv) GetOggInfo() (TaskInfo, string) {
-	ip := r.IP
+func (r *RunEnv) getTaskInfoFromResult(context string) Task {
+	var t0 Task
+	arr := shell.Awk(context, " ")
+
+	if strings.HasPrefix(context, "MANAGER") {
+		t0.Name = "mgr"
+		t0.Type = "MANAGER"
+		t0.Status = arr[1]
+
+		if t0.Status != "RUNNING" {
+			t0.Error, _ = r.GetTrace(arr[0])
+		}
+		return t0
+	}
+
+	if strings.HasPrefix(context, "EXTRACT") || strings.HasPrefix(context, "REPLICAT") {
+		t0.Name = arr[2]
+		//EXT PUM REP
+		t0.Type = shell.SubStr(t0.Name, 0, 3)
+		t0.Status = arr[1]
+		t0.SysID = r.GetSysID(t0.Name)
+		t0.CheckLag = arr[3]
+		t0.CommitLag = arr[4]
+
+		t0.Error, _ = r.GetTrace(arr[2])
+		return t0
+	}
+
+	return t0
+
+}
+
+// GetOggInfo 获取ogg进程的状态,返回struct 和 json两种
+func (r *RunEnv) GetOggInfo() (*TaskInfo, string) {
+	var t TaskInfo
+	var ta []Task
+	t.Name = "ogg"
+	t.IP = r.IP
+
 	result, err := r.CmdOgg("info all")
 	if err != nil {
 		log.Printf(result)
 	}
+
+	//逐行处理结果
 	arr := strings.Split(result, "\n")
 
-	var str2, strr string
 	for _, val := range arr {
-		arr := shell.Awk(val, " ")
-		trace := ""
-		if strings.HasPrefix(val, "MANAGER") {
-			if arr[1] != "RUNNING" {
-				trace = r.GetTrace(arr[0])
-			}
-			str := "{\"SysID\":\"\", \"Type\":\"MANAGER\", \"Status\":\"" + arr[1] + "\",\"Name\":\"MANAGER\",\"CheckLag\":\"\" ,\"CommitLag\":\"\",\"Error\":\"" + trace + "\"}"
 
-			if str2 != "" {
-				str2 = str2 + "," + str
-			} else {
-				str2 += str
-			}
-		}
-
-		if len(arr) > 3 && strings.HasPrefix(arr[2], "EXT") {
-			if arr[1] != "RUNNING" {
-				trace = r.GetTrace(arr[2])
-			}
-			sysID := r.GetSysID(arr[2])
-			str := "{\"SysID\":\"" + sysID + "\", \"Type\":\"EXTRACT\", \"Status\":\"" + arr[1] + "\", \"Name\":\"" + arr[2] + "\",\"CheckLag\":\"" + arr[3] + "\" ,\"CommitLag\":\"" + arr[4] + "\",\"Error\":\"" + trace + "\"}"
-			if str2 != "" {
-				str2 = str2 + "," + str
-			} else {
-				str2 += str
-			}
-
-		}
-		if len(arr) > 3 && strings.HasPrefix(arr[2], "PUM") {
-			if arr[1] != "RUNNING" {
-				trace = r.GetTrace(arr[2])
-			}
-			sysID := r.GetSysID(arr[2])
-			str := "{\"SysID\":\"" + sysID + "\", \"Type\":\"PUM\", \"Status\":\"" + arr[1] + "\", \"Name\":\"" + arr[2] + "\",\"CheckLag\":\"" + arr[3] + "\" ,\"CommitLag\":\"" + arr[4] + "\",\"Error\":\"" + trace + "\"}"
-			if str2 != "" {
-				str2 = str2 + "," + str
-			} else {
-				str2 += str
-			}
-
-		}
-
-		if len(arr) > 3 && strings.HasPrefix(val, "REP") {
-			if arr[1] != "RUNNING" {
-				trace = r.GetTrace(arr[2])
-			}
-			sysID := r.GetSysID(arr[2])
-			str := "{\"SysID\":\"" + sysID + "\", \"Type\":\"REP\", \"Status\":\"" + arr[1] + "\", \"Name\":\"" + arr[2] + "\",\"CheckLag\":\"" + arr[3] + "\" ,\"CommitLag\":\"" + arr[4] + "\",\"Error\":\"" + trace + "\"}"
-			if str2 != "" {
-				str2 = str2 + "," + str
-			} else {
-				str2 += str
-			}
-
-		}
-
+		ta = append(ta, r.getTaskInfoFromResult(val))
 	}
-	strr = "{\"name\": \"ogg\",\"ip\": \"" + ip + "\",\"task\": [" + str2 + "]}"
+	t.Tasks = &ta
 
-	var t TaskInfo
-	err = json.Unmarshal([]byte(strr), &t)
+	statusJson, err := json.Marshal(&t)
 
-	if err != nil {
-
-	}
-	return t, strr
+	return &t, string(statusJson)
 
 }
 
-func (r RunEnv) RepairOgg() string {
+func (r *RunEnv) RepairOgg() string {
 
 	o, _ := r.GetOggInfo()
 	str := ""
-	if o.Task[0].Name == "MANAGER" && o.Task[0].Status != "RUNNING" {
-		str += o.Task[0].Name + " "
-		stdout, err := r.CmdOgg("start mgr")
-		if err != nil {
-			log.Printf(stdout)
-		}
+	for _, task := range *(o.Tasks) {
 
-	}
-	for _, val := range o.Task {
-
-		if val.Status != "RUNNING" {
-			stdout, err := r.CmdOgg("start " + val.Name)
+		if task.Status != "RUNNING" {
+			stdout, err := r.CmdOgg("start " + task.Name)
 			if err != nil {
 				log.Printf(stdout)
 			}
+			str = str + task.Name
 		}
 	}
 
@@ -157,132 +148,128 @@ func (r RunEnv) RepairOgg() string {
 
 }
 
-func (r RunEnv) ResetOgg(name string, thread string) string {
-	if thread == "1" {
-		stdout, err := r.CmdOgg("alter ext " + name + ",tranlog,thread 1,begin now ")
-		if err != nil {
-			log.Printf(stdout)
-		}
-	} else if thread == "2" {
-		stdout, err := r.CmdOgg("alter ext " + name + ",tranlog,thread 1,begin now ")
-		if err != nil {
-			log.Printf(stdout)
-		}
-		stdout, err = r.CmdOgg("alter ext " + name + ",tranlog,thread 2,begin now ")
-		if err != nil {
-			log.Printf(stdout)
-		}
+func (r *RunEnv) ResetOgg(name string, thread string) string {
 
-	} else if thread == "3" {
-		stdout, err := r.CmdOgg("alter ext " + name + ",tranlog,thread 1,begin now ")
-		if err != nil {
-			log.Printf(stdout)
-		}
-		stdout, err = r.CmdOgg("alter ext " + name + ",tranlog,thread 2,begin now ")
-		if err != nil {
-			log.Printf(stdout)
-		}
-		stdout, err = r.CmdOgg("alter ext " + name + ",tranlog,thread 3,begin now ")
-		if err != nil {
-			log.Printf(stdout)
-		}
-	} else if thread == "0" {
+	threads, _ := strconv.Atoi(thread)
+
+	if thread == "0" {
 		stdout, err := r.CmdOgg("alter ext " + name + ",tranlog,begin now ")
 		if err != nil {
 			log.Printf(stdout)
 		}
+		return name + " reset success"
 	}
-	stdout, err := r.CmdOgg("start " + name)
-	if err != nil {
-		log.Printf(stdout)
+
+	for i := 1; i < threads; i++ {
+		stdout, err := r.CmdOgg("alter ext " + name + ",tranlog,thread " + strconv.Itoa(i) + ",begin now ")
+		if err != nil {
+			log.Printf(stdout)
+		}
 	}
 
 	return name + " reset success"
 
 }
 
-func (r RunEnv) GetTrace(name string) string {
+func (r *RunEnv) GetTrace(name string) (string, error) {
 
-	reportPath := r.OGG_HOME + "/dirrpt/" + name + ".rpt"
-	isExits, _ := shell.PathExists(reportPath)
+	reportPath := r.OggHome + "/dirrpt/" + name + ".rpt"
+	isExits, err := shell.PathExists(reportPath)
+	if err != nil {
+		return "", err
+	}
 	if isExits {
 		stdout, err := shell.Command("tail -10000 " + reportPath + "|grep ERROR|tr \"\\n\" \"$\"")
 		if err != nil {
-			log.Println(err)
+			return "", err
 		}
-		return stdout
+		return stdout, err
 	}
-	return "not found log"
+	return "", err
 }
 
-func (r RunEnv) GenDefgenConf() string {
+// 读取配置文件获取ogg运行信息
+// todo: 临时方案，未整合
+func (r *RunEnv) getParam(sysID string) *Param {
+	var p Param
 
 	o, _ := r.GetOggInfo()
-	timeStamp := shell.GetTimestamp()
-	dateStamp := shell.GetTimeForm(timeStamp)
-	var (
-		commonInfo string                                           //ogg用户 def格式信息
-		tableInfo  string                                           //表信息
-		configText string                                           //生成的defgen.prm 内容
-		defText    string                                           //生成的表结构内容
-		defName    = r.OGG_HOME + "/dirdef/common.def." + dateStamp //生成的def文件名
-		filePath   = r.OGG_HOME + "/dirprm/common.prm"              //配置文件
-
-	)
-
-	for _, val := range o.Task {
-		if strings.HasPrefix(val.Name, "EXT") {
+	for _, val := range *(o.Tasks) {
+		//读取pum文件
+		if val.SysID == sysID && val.Type == "PUM" {
 			result, err := r.CmdOgg("view param " + val.Name)
 			if err != nil {
 				log.Printf(result)
 			}
+			//逐行切割
 			arr := strings.Split(result, "\n")
-			for _, val2 := range arr {
+			for _, line := range arr {
 
-				if commonInfo == "" && strings.HasPrefix(val2, "USERID") { //获取commoninfo，只获取一次
-					if strings.Contains(val2, "@") { //需要添加sid，否则会报错OGG-00664 ORA-12547 TNS:lost contact
-						commonInfo = val2 + "\n" + "defsfile " + defName + ",format release 12.2\n"
+				if strings.HasPrefix(line, "USERID ") {
+
+					info := shell.GetPramFromRegexp(line, `USERID (.*),(.*)PASSWORD (.*)`)
+
+					if strings.Contains(info[1], `@`) { //可能存在SID
+						p.UserName = shell.Awk(info[1], "@")[0]
+						p.SID = shell.Awk(info[1], "@")[1]
 					} else {
-						tempString := ""
-						for index, i := range shell.Awk(val2, ",") {
-							if strings.Contains(i, "USERID") {
-								i = i + "@orcl"
-							}
-							if index != 0 {
-								i = " , " + i
-							}
-							tempString = tempString + i
+						p.UserName = info[1]
+						p.SID = "ORCL"
 
-						}
-						commonInfo = tempString + "\n" + "defsfile " + defName + ",format release 12.2\n"
 					}
 
+					p.Password = info[3]
 				}
 
-				if strings.HasPrefix(val2, "table ") { //获取表信息
-					tableInfo = tableInfo + val2 + "\n"
+				if strings.HasPrefix(line, "TABLE ") {
+					info := shell.GetPramFromRegexp(line, `TABLE (.*)`)
+					p.Schema = shell.Awk(info[1], ".")[0]
+
 				}
+
 			}
 		}
+
 	}
 
-	configText = commonInfo + tableInfo
-	shell.Write(filePath, configText)
+	return &p
 
-	cmd := r.OGG_HOME + "/defgen paramfile " + filePath
+}
+
+func (r *RunEnv) GenDefgenConf(sysID string) string {
+
+	param := r.getParam(sysID)
+
+	timeStamp := shell.GetTimestamp()
+	dateStamp := shell.GetTimeForm(timeStamp)
+
+	//最终生成的表结构文件
+	param.DefFileName = r.OggHome + "/dirdef/" + sysID + ".def" + dateStamp
+
+	//参数文件
+	filePath := r.OggHome + "/dirprm/" + sysID + ".prm"
+
+	//根据参数生成参数文件
+	t := template.Must(template.ParseFiles("template/common.prm.tpl"))
+	f, _ := os.Create(filePath)
+	t.Execute(f, param)
+
+	cmd := r.OggHome + "/defgen paramfile " + filePath
 	line := "( source ~/.bash_profile || source /etc/profile ) && " + cmd
 
+	//执行命令生产文件
 	stdout, err := shell.Command(line)
 	if err != nil {
 		log.Println(stdout, err)
 	}
 
-	defText, _ = shell.Read(defName)
+	//明文读取
+	defText, _ := shell.Read(param.DefFileName)
 	return defText
 
 }
 
-func (r RunEnv) GetSysID(extName string) string {
+func (r *RunEnv) GetSysID(extName string) string {
 	sysID := "UNDEFINE"
 
 	result, err := r.CmdOgg("view param " + extName)
@@ -301,7 +288,8 @@ func (r RunEnv) GetSysID(extName string) string {
 	return sysID
 
 }
-func (r RunEnv) RestartOgg(name string) string {
+
+func (r *RunEnv) RestartOgg(name string) string {
 
 	stdout, err := r.CmdOgg("stop " + name)
 	if err != nil {
@@ -315,6 +303,7 @@ func (r RunEnv) RestartOgg(name string) string {
 	return "restart task " + name
 
 }
+
 func (c ClientInfo) GetFromClient(path string) ([]byte, *string) {
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
@@ -338,14 +327,14 @@ func (c ClientInfo) GetFromClient(path string) ([]byte, *string) {
 
 }
 
-func UpdateRepDefFile(from string, to string) string {
+func UpdateRepDefFile(from string, sysID string) string {
 
 	c := ClientInfo{
 		IP:   shell.Awk(from, ":")[0],
 		Port: shell.Awk(from, ":")[1],
 	}
-	filename := "/u01/app/ogg/dirdef/" + to + ".def"
-	_, str := c.GetFromClient("getdef")
+	filename := "/u01/app/ogg/dirdef/" + sysID + ".def"
+	_, str := c.GetFromClient("getdef/" + sysID)
 	shell.Write(filename, *str)
 	return filename + " update success"
 }

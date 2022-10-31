@@ -1,8 +1,8 @@
 address: 0.0.0.0
 port: 34567
-downloadAddress: https://192.168.101.21:34568/upgrade/oggWatchDog
-checkInterval: 60s
-debug: false
+downloadAddress: https://127.0.0.1:34568/upgrade/cdcWatchDog
+checkInterval: 5s
+debug: true
 ssl:
   cert: "cert/ogg.crt"
   key: "cert/ogg.key"
